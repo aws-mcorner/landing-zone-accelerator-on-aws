@@ -63,11 +63,6 @@ export class CustomStack extends cdk.Stack {
     this.props = props;
     this.runOrder = props.runOrder;
 
-    new cdk.cloudformation_include.CfnInclude(this, props.stackName, {
-      templateFile: path.join(props.configDirPath, props.templateFile),
-      parameters: transformCfnParametersArrayToObject(props.parameters),
-    });
-
     new cdk.aws_ssm.StringParameter(this, 'SsmParamStackId', {
       parameterName: `${props.ssmParamNamePrefix}/${cdk.Stack.of(this).stackName}/stack-id`,
       stringValue: cdk.Stack.of(this).stackId,
@@ -77,6 +72,61 @@ export class CustomStack extends cdk.Stack {
       parameterName: `${props.ssmParamNamePrefix}/${cdk.Stack.of(this).stackName}/version`,
       stringValue: version,
     });
+
+    // If the file ends in .ts process it as a CDK nested stack
+    switch(props.templateFile.split('.').pop()){
+      case "ts":
+        this.createFromCdk(props);
+        break;
+      default:
+        this.createFromCfn(props);
+        break;
+    }
+  }
+
+  private createFromCfn(props: CustomStackProps ) {
+    logger.info(`Importing ${props.templateFile} as a CloudFormation file.`);
+
+   new cdk.cloudformation_include.CfnInclude(this, props.stackName, {
+      templateFile: path.join(props.configDirPath, props.templateFile),
+      parameters: transformCfnParametersArrayToObject(props.parameters),
+    });
+  }
+
+  private createFromCdk( props: CustomStackProps ) {
+    logger.info(`Importing ${props.templateFile} as a CDK stack.`);
+    const fs = require('fs');
+
+    // Get file name
+    const custom_file_name = (props.templateFile.split("/").pop() || props.templateFile)
+
+    // Get module name (file name without .ts)
+    const custom_module_name = custom_file_name.split('.').slice(0,-1).join('')
+
+
+    // Copy the file into the directory of custom-stack.ts
+    // This is so bad but it's a quick solve for dependency issues
+    // Eventually will need its own package.json resoluton
+    fs.copyFileSync(
+      `${path.join(props.configDirPath, props.templateFile)}`,
+      `${path.join(__dirname, custom_file_name)}`
+    );
+ 
+    logger.info(`Copied ${path.join(props.configDirPath, props.templateFile)} to ${path.join(__dirname, custom_file_name)}`);
+
+    // Import custom module
+
+    const customImport = require(`./${custom_module_name}`);
+    console.dir(`Imported: ${customImport}`)
+    const UserCustomStack = customImport.default; 
+
+    // Attempt to import
+    logger.info(`Creating stack...`);
+
+    // Create an object out of the default exported value
+    new UserCustomStack(this, props.stackName, props);
+
+    logger.info(`Imported successfully.`);
   }
 }
 
